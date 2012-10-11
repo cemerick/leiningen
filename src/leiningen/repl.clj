@@ -14,23 +14,46 @@
             [leiningen.core.main :as main]))
 
 (def reply-profile {:dependencies '[^:displace ; TODO: displace ignored here
-                                     [org.thnetos/cd-client "0.3.4"
-                                      :exclusions [org.clojure/clojure]]]})
+                                     [org.thnetos/cd-client "0.3.4"]]})
 
 (def trampoline-profile {:dependencies '[^:displace
-                                          [reply "0.1.0-beta11"
-                                           :exclusions [org.clojure/clojure]]]})
+                                          [reply "0.1.0-beta11"]]})
+
+(defn- dependency-set
+  "Given a dependency hierarchy, returns the set of groupId/artifactIds
+found therein."
+  [hierarchy]
+  (letfn [(reduce-hierarchy [set hierarchy]
+            (reduce
+              reduce-hierarchy
+              (into set (map first (keys hierarchy)))
+              (remove nil? (vals hierarchy))))]
+    (reduce-hierarchy #{} hierarchy)))
 
 (defn profiles-for [project trampoline? reply?]
   (let [base (or (:repl (:profiles project))
                  (:repl (user/profiles))
                  {:dependencies '[^:displace
-                                  [org.clojure/tools.nrepl "0.2.0-beta9"
-                                   :exclusions [org.clojure/clojure]]
+                                  [org.clojure/tools.nrepl "0.2.0-beta9"]
                                   ^:displace
-                                  [clojure-complete "0.2.2"
-                                   :exclusions [org.clojure/clojure]]]})]
-    [base (if reply? reply-profile) (if trampoline? trampoline-profile)]))
+                                  [clojure-complete "0.2.2"]]})
+        deps-set #(dependency-set (classpath/dependency-hierarchy
+                                    :dependencies %))
+        base-deps (deps-set project)
+        profiles [base (if reply? reply-profile) (if trampoline? trampoline-profile)]
+        profile-deps (map #(when %
+                             (deps-set (assoc project :dependencies (:dependencies %))))
+                          profiles)
+        profiles (mapv
+                   (fn [profile deps]
+                     (if-let [conflicts (seq (clojure.set/intersection base-deps deps))]
+                       (update-in profile [:dependencies]
+                                  #(mapv (fn [dep] (into dep [:exclusions (vec conflicts)])) %))
+                       profile))
+                   profiles
+                   profile-deps)]
+    ;(clojure.pprint/pprint profiles)
+    profiles))
 
 (defn- handler-for [{{:keys [nrepl-middleware nrepl-handler]} :repl-options}]
   (when (and nrepl-middleware nrepl-handler)
